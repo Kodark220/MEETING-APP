@@ -55,10 +55,10 @@ export async function meetingRoutes(app: FastifyInstance) {
       if (!isMeet) continue;
       const meeting = await findMeetingByProviderEventId("google_meet", event.id);
 
-      const attendees = (event.attendees || []).map((att) => ({
+      const attendees = (event.attendees || []).map((att: { displayName?: string | null; email?: string | null }) => ({
         name: att.displayName || att.email || "Unknown",
         email: att.email || ""
-      })).filter((att) => Boolean(att.email));
+      })).filter((att: { email: string }) => Boolean(att.email));
 
       const start = event.start?.dateTime || null;
       const end = event.end?.dateTime || null;

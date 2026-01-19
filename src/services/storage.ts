@@ -27,9 +27,14 @@ function getS3Client(): S3Client {
   return s3Client;
 }
 
-export async function saveRecordingBuffer(buffer: ArrayBuffer, extension: string, contentType: string): Promise<StoredFile> {
+export async function saveRecordingBuffer(buffer: ArrayBuffer | Uint8Array, extension: string, contentType: string): Promise<StoredFile> {
   const env = loadEnv();
   const filename = `${Date.now()}-${randomUUID()}.${extension}`;
+  const payload = Buffer.isBuffer(buffer)
+    ? buffer
+    : buffer instanceof ArrayBuffer
+      ? Buffer.from(buffer)
+      : Buffer.from(buffer.buffer, buffer.byteOffset, buffer.byteLength);
 
   if (env.STORAGE_DRIVER === "s3") {
     if (!env.S3_BUCKET) {
@@ -40,7 +45,7 @@ export async function saveRecordingBuffer(buffer: ArrayBuffer, extension: string
     await client.send(new PutObjectCommand({
       Bucket: env.S3_BUCKET,
       Key: key,
-      Body: Buffer.from(buffer),
+      Body: payload,
       ContentType: contentType
     }));
     return { path: `s3://${env.S3_BUCKET}/${key}`, storage: "s3", contentType };
@@ -49,7 +54,7 @@ export async function saveRecordingBuffer(buffer: ArrayBuffer, extension: string
   const dir = join(process.cwd(), env.STORAGE_LOCAL_PATH, "recordings");
   await mkdir(dir, { recursive: true });
   const filePath = join(dir, filename);
-  await writeFile(filePath, Buffer.from(buffer));
+  await writeFile(filePath, payload);
   return { path: filePath, storage: "local", contentType };
 }
 

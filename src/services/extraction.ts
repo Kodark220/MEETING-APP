@@ -90,7 +90,7 @@ Next meeting date: ${input.meeting.next_meeting_date || "Unknown"}
 Transcript:
 ${trimmedTranscript}`;
 
-  const response = await openai.responses.create({
+  const response = await (openai.responses.create as any)({
     model: env.OPENAI_MODEL,
     input: [
       { role: "system", content: "You are a precise meeting outcomes extractor." },

@@ -50,7 +50,14 @@ export function getGoogleClientWithTokens(tokens: {
   expiry_date?: number | null;
 }) {
   const client = getGoogleOAuthClient();
-  client.setCredentials(tokens);
+  const credentials: import("google-auth-library").Credentials = {
+    access_token: tokens.access_token || undefined,
+    refresh_token: tokens.refresh_token || undefined,
+    scope: tokens.scope || undefined,
+    token_type: tokens.token_type || undefined,
+    expiry_date: tokens.expiry_date || undefined
+  };
+  client.setCredentials(credentials);
   return client;
 }
 
@@ -66,7 +73,7 @@ export async function listRecentCalendarEvents(auth: import("google-auth-library
     conferenceDataVersion: 1,
     singleEvents: true,
     orderBy: "startTime"
-  });
+  } as any);
 
   return res.data.items || [];
 }
@@ -115,7 +122,7 @@ export async function downloadDriveFile(
   const drive = google.drive({ version: "v3", auth });
   const res = await drive.files.get(
     { fileId, alt: "media" },
-    { responseType: "arraybuffer" }
+    { responseType: "arraybuffer" } as any
   );
-  return res.data as ArrayBuffer;
+  return (res as any).data as ArrayBuffer;
 }
