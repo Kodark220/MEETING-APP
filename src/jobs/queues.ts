@@ -11,5 +11,8 @@ export const recordingQueue = new Queue("recording-processing", {
 });
 
 export async function enqueueRecording(recordingId: string) {
-  await recordingQueue.add("process-recording", { recordingId }, { attempts: 2 });
+  await recordingQueue.add("process-recording", { recordingId }, {
+    attempts: 5,
+    backoff: { type: "exponential", delay: 30_000 }
+  });
 }

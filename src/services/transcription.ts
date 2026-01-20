@@ -4,7 +4,11 @@ import { loadEnv } from "../config.js";
 import { getRecordingStream } from "./storage.js";
 
 const env = loadEnv();
-const openai = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+const openai = new OpenAI({
+  apiKey: env.OPENAI_API_KEY,
+  maxRetries: 4,
+  timeout: 10 * 60 * 1000
+});
 
 export async function transcribeRecording(filePath: string, filename: string) {
   const stream = await getRecordingStream(filePath);
