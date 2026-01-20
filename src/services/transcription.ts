@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import https from "node:https";
 import { toFile } from "openai/uploads";
 import { loadEnv } from "../config.js";
 import { getRecordingStream } from "./storage.js";
@@ -7,7 +8,8 @@ const env = loadEnv();
 const openai = new OpenAI({
   apiKey: env.OPENAI_API_KEY,
   maxRetries: 4,
-  timeout: 10 * 60 * 1000
+  timeout: 10 * 60 * 1000,
+  httpAgent: new https.Agent({ keepAlive: true, family: 4 })
 });
 
 export async function transcribeRecording(filePath: string, filename: string) {

@@ -1,9 +1,15 @@
 import OpenAI from "openai";
+import https from "node:https";
 import { z } from "zod";
 import { loadEnv } from "../config.js";
 
 const env = loadEnv();
-const openai = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+const openai = new OpenAI({
+  apiKey: env.OPENAI_API_KEY,
+  maxRetries: 4,
+  timeout: 10 * 60 * 1000,
+  httpAgent: new https.Agent({ keepAlive: true, family: 4 })
+});
 
 const outputSchema = z.object({
   decisions: z.array(
@@ -90,9 +96,9 @@ Next meeting date: ${input.meeting.next_meeting_date || "Unknown"}
 Transcript:
 ${trimmedTranscript}`;
 
-  const response = await (openai.responses.create as any)({
+  const response = await openai.chat.completions.create({
     model: env.OPENAI_MODEL,
-    input: [
+    messages: [
       { role: "system", content: "You are a precise meeting outcomes extractor." },
       { role: "user", content: prompt }
     ],
@@ -188,7 +194,7 @@ ${trimmedTranscript}`;
     }
   });
 
-  const content = response.output_text || "{}";
+  const content = response.choices[0]?.message?.content || "{}";
   const parsed = outputSchema.safeParse(JSON.parse(content));
   if (!parsed.success) {
     throw new Error(`Extraction failed: ${parsed.error.message}`);
