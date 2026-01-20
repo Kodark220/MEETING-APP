@@ -16,8 +16,13 @@ let s3Client: S3Client | null = null;
 function getS3Client(): S3Client {
   if (s3Client) return s3Client;
   const env = loadEnv();
+  const region = env.S3_REGION
+    ? env.S3_REGION
+    : env.S3_ENDPOINT?.includes("r2.cloudflarestorage.com")
+      ? "auto"
+      : "us-east-1";
   s3Client = new S3Client({
-    region: "us-east-1",
+    region,
     endpoint: env.S3_ENDPOINT || undefined,
     credentials: env.S3_ACCESS_KEY_ID && env.S3_SECRET_ACCESS_KEY ? {
       accessKeyId: env.S3_ACCESS_KEY_ID,
