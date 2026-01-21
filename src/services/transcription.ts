@@ -90,7 +90,7 @@ async function transcribeWithDeepgram(fileBuffer: Buffer, contentType: string): 
       Authorization: `Token ${env.DEEPGRAM_API_KEY}`,
       "Content-Type": contentType
     },
-    body: fileBuffer
+    body: new Uint8Array(fileBuffer)
   });
 
   if (!response.ok) {
@@ -119,7 +119,7 @@ async function transcribeWithAssemblyAI(fileBuffer: Buffer, contentType: string)
       authorization: env.ASSEMBLYAI_API_KEY,
       "content-type": contentType
     },
-    body: fileBuffer as unknown as BodyInit
+    body: new Uint8Array(fileBuffer)
   });
 
   if (!uploadRes.ok) {
