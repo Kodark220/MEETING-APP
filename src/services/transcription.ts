@@ -119,7 +119,7 @@ async function transcribeWithAssemblyAI(fileBuffer: Buffer, contentType: string)
       authorization: env.ASSEMBLYAI_API_KEY,
       "content-type": contentType
     },
-    body: fileBuffer
+    body: fileBuffer as unknown as BodyInit
   });
 
   if (!uploadRes.ok) {
