@@ -23,6 +23,7 @@ const envSchema = z.object({
   ASSEMBLYAI_API_KEY: z.string().optional(),
   ASSEMBLYAI_POLL_INTERVAL_MS: z.coerce.number().default(3000),
   ASSEMBLYAI_TIMEOUT_MS: z.coerce.number().default(10 * 60 * 1000),
+  TRANSCRIBE_PROVIDER: z.enum(["openai", "assemblyai", "deepgram"]).default("openai"),
   TRANSCRIBE_MAX_BYTES: z.coerce.number().default(24 * 1024 * 1024),
   TRANSCRIBE_SEGMENT_SECONDS: z.coerce.number().default(300),
   TRANSCRIBE_RESPONSE_FORMAT: z.enum(["json", "verbose_json", "text", "srt", "vtt"]).default("json"),

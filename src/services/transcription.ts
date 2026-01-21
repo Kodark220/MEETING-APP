@@ -177,6 +177,49 @@ async function transcribeWithAssemblyAI(fileBuffer: Buffer, contentType: string)
   throw new Error("AssemblyAI transcription timed out");
 }
 
+function getProviderOrder() {
+  const order = env.TRANSCRIBE_PROVIDER === "assemblyai"
+    ? ["assemblyai", "openai", "deepgram"]
+    : env.TRANSCRIBE_PROVIDER === "deepgram"
+      ? ["deepgram", "openai", "assemblyai"]
+      : ["openai", "assemblyai", "deepgram"];
+
+  return order.filter((provider) => {
+    if (provider === "assemblyai") {
+      return Boolean(env.ASSEMBLYAI_API_KEY);
+    }
+    if (provider === "deepgram") {
+      return Boolean(env.DEEPGRAM_API_KEY);
+    }
+    return true;
+  });
+}
+
+async function transcribeWithFallback(fileBuffer: Buffer, filename: string, contentType: string): Promise<TranscriptResult> {
+  const order = getProviderOrder();
+  let lastErr: unknown = null;
+  for (const provider of order) {
+    try {
+      if (provider === "openai") {
+        return await transcribeWithOpenAI(fileBuffer, filename);
+      }
+      if (provider === "assemblyai") {
+        return await transcribeWithAssemblyAI(fileBuffer, contentType);
+      }
+      return await transcribeWithDeepgram(fileBuffer, contentType);
+    } catch (err) {
+      lastErr = err;
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`Transcription with ${provider} failed: ${message}`);
+      if (provider === "openai" && !isQuotaError(err) && order.length === 1) {
+        throw err;
+      }
+    }
+  }
+
+  throw lastErr ?? new Error("Transcription failed");
+}
+
 async function runFfmpeg(args: string[]) {
   return new Promise<void>((resolve, reject) => {
     const proc = spawn("ffmpeg", args, { stdio: ["ignore", "ignore", "pipe"] });
@@ -218,9 +261,7 @@ async function getLocalPath(filePath: string, filename: string, tempDirs: string
 
 export async function transcribeRecording(filePath: string, filename: string) {
   const tempDirs: string[] = [];
-  const assemblyEnabled = Boolean(env.ASSEMBLYAI_API_KEY);
-  const deepgramEnabled = Boolean(env.DEEPGRAM_API_KEY);
-  let preferOpenAi = true;
+  const providerOrder = getProviderOrder();
   try {
     const localPath = await getLocalPath(filePath, filename, tempDirs);
     const fileInfo = await stat(localPath);
@@ -267,33 +308,7 @@ export async function transcribeRecording(filePath: string, filename: string) {
         const segmentPath = join(segmentDir, segmentName);
         const segmentBuffer = await readFile(segmentPath);
         const contentType = guessContentType(segmentName);
-        let segmentResult: TranscriptResult | null = null;
-        if (preferOpenAi) {
-          try {
-            segmentResult = await transcribeWithOpenAI(segmentBuffer, segmentName);
-          } catch (err) {
-            if (isQuotaError(err)) {
-              preferOpenAi = false;
-            }
-            if (assemblyEnabled) {
-              console.warn("OpenAI transcription failed, falling back to AssemblyAI", err);
-              segmentResult = await transcribeWithAssemblyAI(segmentBuffer, contentType);
-            } else if (deepgramEnabled) {
-              console.warn("OpenAI transcription failed, falling back to Deepgram", err);
-              segmentResult = await transcribeWithDeepgram(segmentBuffer, contentType);
-            } else {
-              throw err;
-            }
-          }
-        } else {
-          if (assemblyEnabled) {
-            segmentResult = await transcribeWithAssemblyAI(segmentBuffer, contentType);
-          } else if (deepgramEnabled) {
-            segmentResult = await transcribeWithDeepgram(segmentBuffer, contentType);
-          } else {
-            throw new Error("No fallback transcription provider configured");
-          }
-        }
+        const segmentResult = await transcribeWithFallback(segmentBuffer, segmentName, contentType);
 
         combinedText += `${segmentResult.text}\n`;
         if (segmentResult.segments.length) {
@@ -309,28 +324,10 @@ export async function transcribeRecording(filePath: string, filename: string) {
 
     const fileBuffer = await readFile(localPath);
     const contentType = guessContentType(filename);
-    if (preferOpenAi) {
-      try {
-        return await transcribeWithOpenAI(fileBuffer, filename);
-      } catch (err) {
-        if (assemblyEnabled) {
-          console.warn("OpenAI transcription failed, falling back to AssemblyAI", err);
-          return await transcribeWithAssemblyAI(fileBuffer, contentType);
-        }
-        if (deepgramEnabled) {
-          console.warn("OpenAI transcription failed, falling back to Deepgram", err);
-          return await transcribeWithDeepgram(fileBuffer, contentType);
-        }
-        throw err;
-      }
+    if (!providerOrder.length) {
+      throw new Error("No transcription provider configured");
     }
-    if (assemblyEnabled) {
-      return await transcribeWithAssemblyAI(fileBuffer, contentType);
-    }
-    if (deepgramEnabled) {
-      return await transcribeWithDeepgram(fileBuffer, contentType);
-    }
-    throw new Error("No fallback transcription provider configured");
+    return await transcribeWithFallback(fileBuffer, filename, contentType);
   } finally {
     await Promise.all(
       tempDirs.map((dir) => rm(dir, { recursive: true, force: true }).catch(() => undefined))
