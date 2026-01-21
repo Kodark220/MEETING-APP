@@ -7,6 +7,7 @@ import { withOpenAiRetries } from "./openai-retry.js";
 const env = loadEnv();
 const openai = new OpenAI({
   apiKey: env.OPENAI_API_KEY,
+  baseURL: env.OPENAI_BASE_URL,
   maxRetries: 4,
   timeout: 10 * 60 * 1000,
   httpAgent: new https.Agent({ keepAlive: true, family: 4 })

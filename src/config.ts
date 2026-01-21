@@ -16,6 +16,7 @@ const envSchema = z.object({
   S3_SECRET_ACCESS_KEY: z.string().optional(),
   S3_REGION: z.string().optional(),
   OPENAI_API_KEY: z.string().min(1),
+  OPENAI_BASE_URL: z.string().url().optional(),
   OPENAI_MODEL: z.string().default("gpt-4o-mini"),
   WHISPER_MODEL: z.string().default("whisper-1"),
   DEEPGRAM_API_KEY: z.string().optional(),
