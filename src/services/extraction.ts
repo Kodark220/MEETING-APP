@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import https from "node:https";
 import { z } from "zod";
 import { loadEnv } from "../config.js";
+import { withOpenAiRetries } from "./openai-retry.js";
 
 const env = loadEnv();
 const openai = new OpenAI({
@@ -96,103 +97,105 @@ Next meeting date: ${input.meeting.next_meeting_date || "Unknown"}
 Transcript:
 ${trimmedTranscript}`;
 
-  const response = await openai.chat.completions.create({
-    model: env.OPENAI_MODEL,
-    messages: [
-      { role: "system", content: "You are a precise meeting outcomes extractor." },
-      { role: "user", content: prompt }
-    ],
-    response_format: {
-      type: "json_schema",
-      json_schema: {
-        name: "meeting_outcomes",
-        schema: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            decisions: {
-              type: "array",
-              items: {
-                type: "object",
-                additionalProperties: false,
-                properties: {
-                  topic: { type: "string" },
-                  items: {
-                    type: "array",
+  const response = await withOpenAiRetries(async () => {
+    return openai.chat.completions.create({
+      model: env.OPENAI_MODEL,
+      messages: [
+        { role: "system", content: "You are a precise meeting outcomes extractor." },
+        { role: "user", content: prompt }
+      ],
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "meeting_outcomes",
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              decisions: {
+                type: "array",
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  properties: {
+                    topic: { type: "string" },
                     items: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        additionalProperties: false,
+                        properties: {
+                          text: { type: "string" },
+                          explicit: { type: "boolean" },
+                          confidence: { type: "number" }
+                        },
+                        required: ["text", "explicit", "confidence"]
+                      }
+                    }
+                  },
+                  required: ["topic", "items"]
+                }
+              },
+              action_items: {
+                type: "array",
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  properties: {
+                    text: { type: "string" },
+                    owner: {
                       type: "object",
                       additionalProperties: false,
                       properties: {
-                        text: { type: "string" },
-                        explicit: { type: "boolean" },
-                        confidence: { type: "number" }
+                        name: { type: "string" },
+                        email: { type: "string" }
                       },
-                      required: ["text", "explicit", "confidence"]
-                    }
-                  }
-                },
-                required: ["topic", "items"]
-              }
-            },
-            action_items: {
-              type: "array",
-              items: {
-                type: "object",
-                additionalProperties: false,
-                properties: {
-                  text: { type: "string" },
-                  owner: {
-                    type: "object",
-                    additionalProperties: false,
-                    properties: {
-                      name: { type: "string" },
-                      email: { type: "string" }
+                      required: ["name", "email"]
                     },
-                    required: ["name", "email"]
+                    deadline: { type: "string" },
+                    deadline_inferred: { type: "boolean" },
+                    confidence: { type: "number" }
                   },
-                  deadline: { type: "string" },
-                  deadline_inferred: { type: "boolean" },
-                  confidence: { type: "number" }
-                },
-                required: ["text", "owner", "deadline", "deadline_inferred", "confidence"]
-              }
-            },
-            followups: {
-              type: "array",
-              items: {
-                type: "object",
-                additionalProperties: false,
-                properties: {
-                  to: {
-                    type: "object",
-                    additionalProperties: false,
-                    properties: {
-                      name: { type: "string" },
-                      email: { type: "string" }
-                    },
-                    required: ["name", "email"]
-                  },
-                  subject: { type: "string" },
-                  body: { type: "string" }
-                },
-                required: ["to", "subject", "body"]
-              }
-            },
-            internal_notes: {
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                omitted_actions: { type: "array", items: { type: "string" } },
-                ambiguities: { type: "array", items: { type: "string" } }
+                  required: ["text", "owner", "deadline", "deadline_inferred", "confidence"]
+                }
               },
-              required: ["omitted_actions", "ambiguities"]
-            }
-          },
-          required: ["decisions", "action_items", "followups", "internal_notes"]
+              followups: {
+                type: "array",
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  properties: {
+                    to: {
+                      type: "object",
+                      additionalProperties: false,
+                      properties: {
+                        name: { type: "string" },
+                        email: { type: "string" }
+                      },
+                      required: ["name", "email"]
+                    },
+                    subject: { type: "string" },
+                    body: { type: "string" }
+                  },
+                  required: ["to", "subject", "body"]
+                }
+              },
+              internal_notes: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  omitted_actions: { type: "array", items: { type: "string" } },
+                  ambiguities: { type: "array", items: { type: "string" } }
+                },
+                required: ["omitted_actions", "ambiguities"]
+              }
+            },
+            required: ["decisions", "action_items", "followups", "internal_notes"]
+          }
         }
       }
-    }
-  });
+    });
+  }, { attempts: 3, baseDelayMs: 3000, maxDelayMs: 30000 });
 
   const content = response.choices[0]?.message?.content || "{}";
   const parsed = outputSchema.safeParse(JSON.parse(content));
