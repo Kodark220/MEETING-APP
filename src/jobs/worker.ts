@@ -3,6 +3,8 @@ import { connection } from "./queues.js";
 import { processRecording } from "./processRecording.js";
 import { updateRecordingStatus } from "../services/store.js";
 
+console.log("Worker starting...");
+
 const worker = new Worker(
   "recording-processing",
   async (job) => {
@@ -12,6 +14,10 @@ const worker = new Worker(
   },
   { connection }
 );
+
+worker.on("active", (job) => {
+  console.log(`Job started: ${job.id}`);
+});
 
 worker.on("completed", (job) => {
   console.log(`Job completed: ${job.id}`);
@@ -27,4 +33,8 @@ worker.on("failed", (job, err) => {
       });
     }
   }
+});
+
+worker.on("error", (err) => {
+  console.error("Worker error", err);
 });
