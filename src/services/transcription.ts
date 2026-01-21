@@ -26,6 +26,157 @@ const transcribeClient = new OpenAI({
   httpAgent: new https.Agent({ keepAlive: false, family: 4 })
 });
 
+type TranscriptResult = {
+  text: string;
+  segments: any[];
+};
+
+function guessContentType(filename: string) {
+  const lower = filename.toLowerCase();
+  if (lower.endsWith(".mp3")) return "audio/mpeg";
+  if (lower.endsWith(".wav")) return "audio/wav";
+  if (lower.endsWith(".m4a")) return "audio/mp4";
+  if (lower.endsWith(".mp4")) return "video/mp4";
+  if (lower.endsWith(".webm")) return "audio/webm";
+  return "application/octet-stream";
+}
+
+function isQuotaError(err: unknown) {
+  if (!err || typeof err !== "object") return false;
+  const anyErr = err as { status?: number; error?: { code?: string; type?: string }; code?: string; message?: string };
+  if (anyErr.status === 429) return true;
+  if (anyErr.code === "insufficient_quota") return true;
+  if (anyErr.error?.code === "insufficient_quota") return true;
+  if (anyErr.error?.type === "insufficient_quota") return true;
+  if (typeof anyErr.message === "string" && anyErr.message.includes("insufficient_quota")) return true;
+  return false;
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function transcribeWithOpenAI(fileBuffer: Buffer, filename: string): Promise<TranscriptResult> {
+  return withOpenAiRetries(async () => {
+    const file = await toFile(fileBuffer, filename);
+    const transcription = await transcribeClient.audio.transcriptions.create({
+      file,
+      model: env.WHISPER_MODEL,
+      response_format: env.TRANSCRIBE_RESPONSE_FORMAT
+    });
+
+    const transcriptionText = (transcription as { text?: string }).text || "";
+    return {
+      text: transcriptionText,
+      segments: env.TRANSCRIBE_RESPONSE_FORMAT === "verbose_json"
+        ? (transcription as { segments?: any[] }).segments || []
+        : []
+    };
+  }, { attempts: 4, baseDelayMs: 3000, maxDelayMs: 30000 });
+}
+
+async function transcribeWithDeepgram(fileBuffer: Buffer, contentType: string): Promise<TranscriptResult> {
+  if (!env.DEEPGRAM_API_KEY) {
+    throw new Error("DEEPGRAM_API_KEY is not set");
+  }
+  const url = new URL("https://api.deepgram.com/v1/listen");
+  url.searchParams.set("model", env.DEEPGRAM_MODEL);
+  url.searchParams.set("punctuate", "true");
+  url.searchParams.set("smart_format", "true");
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Token ${env.DEEPGRAM_API_KEY}`,
+      "Content-Type": contentType
+    },
+    body: fileBuffer
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Deepgram error ${response.status}: ${text}`);
+  }
+
+  const data = await response.json() as {
+    results?: {
+      channels?: { alternatives?: { transcript?: string }[] }[];
+    };
+  };
+
+  const transcriptText = data?.results?.channels?.[0]?.alternatives?.[0]?.transcript || "";
+  return { text: transcriptText, segments: [] };
+}
+
+async function transcribeWithAssemblyAI(fileBuffer: Buffer, contentType: string): Promise<TranscriptResult> {
+  if (!env.ASSEMBLYAI_API_KEY) {
+    throw new Error("ASSEMBLYAI_API_KEY is not set");
+  }
+
+  const uploadRes = await fetch("https://api.assemblyai.com/v2/upload", {
+    method: "POST",
+    headers: {
+      authorization: env.ASSEMBLYAI_API_KEY,
+      "content-type": contentType
+    },
+    body: fileBuffer
+  });
+
+  if (!uploadRes.ok) {
+    const text = await uploadRes.text();
+    throw new Error(`AssemblyAI upload error ${uploadRes.status}: ${text}`);
+  }
+
+  const uploadData = await uploadRes.json() as { upload_url?: string };
+  if (!uploadData.upload_url) {
+    throw new Error("AssemblyAI upload missing upload_url");
+  }
+
+  const transcriptRes = await fetch("https://api.assemblyai.com/v2/transcript", {
+    method: "POST",
+    headers: {
+      authorization: env.ASSEMBLYAI_API_KEY,
+      "content-type": "application/json"
+    },
+    body: JSON.stringify({
+      audio_url: uploadData.upload_url,
+      punctuate: true,
+      format_text: true
+    })
+  });
+
+  if (!transcriptRes.ok) {
+    const text = await transcriptRes.text();
+    throw new Error(`AssemblyAI transcript error ${transcriptRes.status}: ${text}`);
+  }
+
+  const transcriptData = await transcriptRes.json() as { id?: string };
+  if (!transcriptData.id) {
+    throw new Error("AssemblyAI transcript missing id");
+  }
+
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < env.ASSEMBLYAI_TIMEOUT_MS) {
+    const pollRes = await fetch(`https://api.assemblyai.com/v2/transcript/${transcriptData.id}`, {
+      headers: { authorization: env.ASSEMBLYAI_API_KEY }
+    });
+    if (!pollRes.ok) {
+      const text = await pollRes.text();
+      throw new Error(`AssemblyAI poll error ${pollRes.status}: ${text}`);
+    }
+    const pollData = await pollRes.json() as { status?: string; text?: string; error?: string };
+    if (pollData.status === "completed") {
+      return { text: pollData.text || "", segments: [] };
+    }
+    if (pollData.status === "error") {
+      throw new Error(`AssemblyAI error: ${pollData.error || "unknown"}`);
+    }
+    await sleep(env.ASSEMBLYAI_POLL_INTERVAL_MS);
+  }
+
+  throw new Error("AssemblyAI transcription timed out");
+}
+
 async function runFfmpeg(args: string[]) {
   return new Promise<void>((resolve, reject) => {
     const proc = spawn("ffmpeg", args, { stdio: ["ignore", "ignore", "pipe"] });
@@ -67,6 +218,9 @@ async function getLocalPath(filePath: string, filename: string, tempDirs: string
 
 export async function transcribeRecording(filePath: string, filename: string) {
   const tempDirs: string[] = [];
+  const assemblyEnabled = Boolean(env.ASSEMBLYAI_API_KEY);
+  const deepgramEnabled = Boolean(env.DEEPGRAM_API_KEY);
+  let preferOpenAi = true;
   try {
     const localPath = await getLocalPath(filePath, filename, tempDirs);
     const fileInfo = await stat(localPath);
@@ -111,21 +265,39 @@ export async function transcribeRecording(filePath: string, filename: string) {
 
       for (const segmentName of segmentFiles) {
         const segmentPath = join(segmentDir, segmentName);
-        const segmentStream = createReadStream(segmentPath);
-        const segmentFile = await toFile(segmentStream, segmentName);
-        const segmentTranscription = await withOpenAiRetries(async () => {
-          return transcribeClient.audio.transcriptions.create({
-            file: segmentFile,
-            model: env.WHISPER_MODEL,
-            response_format: env.TRANSCRIBE_RESPONSE_FORMAT
-          });
-        }, { attempts: 4, baseDelayMs: 3000, maxDelayMs: 30000 });
+        const segmentBuffer = await readFile(segmentPath);
+        const contentType = guessContentType(segmentName);
+        let segmentResult: TranscriptResult | null = null;
+        if (preferOpenAi) {
+          try {
+            segmentResult = await transcribeWithOpenAI(segmentBuffer, segmentName);
+          } catch (err) {
+            if (isQuotaError(err)) {
+              preferOpenAi = false;
+            }
+            if (assemblyEnabled) {
+              console.warn("OpenAI transcription failed, falling back to AssemblyAI", err);
+              segmentResult = await transcribeWithAssemblyAI(segmentBuffer, contentType);
+            } else if (deepgramEnabled) {
+              console.warn("OpenAI transcription failed, falling back to Deepgram", err);
+              segmentResult = await transcribeWithDeepgram(segmentBuffer, contentType);
+            } else {
+              throw err;
+            }
+          }
+        } else {
+          if (assemblyEnabled) {
+            segmentResult = await transcribeWithAssemblyAI(segmentBuffer, contentType);
+          } else if (deepgramEnabled) {
+            segmentResult = await transcribeWithDeepgram(segmentBuffer, contentType);
+          } else {
+            throw new Error("No fallback transcription provider configured");
+          }
+        }
 
-        const segmentText = (segmentTranscription as { text?: string }).text || "";
-        combinedText += `${segmentText}\n`;
-        if (env.TRANSCRIBE_RESPONSE_FORMAT === "verbose_json") {
-          const segs = (segmentTranscription as { segments?: any[] }).segments || [];
-          combinedSegments.push(...segs);
+        combinedText += `${segmentResult.text}\n`;
+        if (segmentResult.segments.length) {
+          combinedSegments.push(...segmentResult.segments);
         }
       }
 
@@ -136,23 +308,29 @@ export async function transcribeRecording(filePath: string, filename: string) {
     }
 
     const fileBuffer = await readFile(localPath);
-    return withOpenAiRetries(async () => {
-      const file = await toFile(fileBuffer, filename);
-
-      const transcription = await transcribeClient.audio.transcriptions.create({
-        file,
-        model: env.WHISPER_MODEL,
-        response_format: env.TRANSCRIBE_RESPONSE_FORMAT
-      });
-
-      const transcriptionText = (transcription as { text?: string }).text || "";
-      return {
-        text: transcriptionText,
-        segments: env.TRANSCRIBE_RESPONSE_FORMAT === "verbose_json"
-          ? (transcription as { segments?: any[] }).segments || []
-          : []
-      };
-    }, { attempts: 4, baseDelayMs: 3000, maxDelayMs: 30000 });
+    const contentType = guessContentType(filename);
+    if (preferOpenAi) {
+      try {
+        return await transcribeWithOpenAI(fileBuffer, filename);
+      } catch (err) {
+        if (assemblyEnabled) {
+          console.warn("OpenAI transcription failed, falling back to AssemblyAI", err);
+          return await transcribeWithAssemblyAI(fileBuffer, contentType);
+        }
+        if (deepgramEnabled) {
+          console.warn("OpenAI transcription failed, falling back to Deepgram", err);
+          return await transcribeWithDeepgram(fileBuffer, contentType);
+        }
+        throw err;
+      }
+    }
+    if (assemblyEnabled) {
+      return await transcribeWithAssemblyAI(fileBuffer, contentType);
+    }
+    if (deepgramEnabled) {
+      return await transcribeWithDeepgram(fileBuffer, contentType);
+    }
+    throw new Error("No fallback transcription provider configured");
   } finally {
     await Promise.all(
       tempDirs.map((dir) => rm(dir, { recursive: true, force: true }).catch(() => undefined))
