@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import https from "node:https";
 import { toFile } from "openai/uploads";
 import { createReadStream, createWriteStream } from "fs";
-import { mkdir, readdir, rm, stat } from "fs/promises";
+import { mkdir, readdir, readFile, rm, stat } from "fs/promises";
 import { tmpdir } from "os";
 import { basename, dirname, join } from "path";
 import { pipeline } from "stream/promises";
@@ -124,9 +124,9 @@ export async function transcribeRecording(filePath: string, filename: string) {
       };
     }
 
+    const fileBuffer = await readFile(localPath);
     return withOpenAiRetries(async () => {
-      const stream = createReadStream(localPath);
-      const file = await toFile(stream, filename);
+      const file = await toFile(fileBuffer, filename);
 
       const transcription = await openai.audio.transcriptions.create({
         file,
