@@ -114,9 +114,11 @@ export async function transcribeRecording(filePath: string, filename: string) {
           });
         }, { attempts: 4, baseDelayMs: 3000, maxDelayMs: 30000 });
 
-        combinedText += `${segmentTranscription.text || ""}\n`;
+        const segmentText = (segmentTranscription as { text?: string }).text || "";
+        combinedText += `${segmentText}\n`;
         if (env.TRANSCRIBE_RESPONSE_FORMAT === "verbose_json") {
-          combinedSegments.push(...(segmentTranscription.segments || []));
+          const segs = (segmentTranscription as { segments?: any[] }).segments || [];
+          combinedSegments.push(...segs);
         }
       }
 
@@ -136,10 +138,11 @@ export async function transcribeRecording(filePath: string, filename: string) {
         response_format: env.TRANSCRIBE_RESPONSE_FORMAT
       });
 
+      const transcriptionText = (transcription as { text?: string }).text || "";
       return {
-        text: transcription.text || "",
+        text: transcriptionText,
         segments: env.TRANSCRIBE_RESPONSE_FORMAT === "verbose_json"
-          ? transcription.segments || []
+          ? (transcription as { segments?: any[] }).segments || []
           : []
       };
     }, { attempts: 4, baseDelayMs: 3000, maxDelayMs: 30000 });
