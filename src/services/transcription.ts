@@ -19,6 +19,13 @@ const openai = new OpenAI({
   httpAgent: new https.Agent({ keepAlive: true, family: 4 })
 });
 
+const transcribeClient = new OpenAI({
+  apiKey: env.OPENAI_API_KEY,
+  maxRetries: 0,
+  timeout: env.TRANSCRIBE_TIMEOUT_MS,
+  httpAgent: new https.Agent({ keepAlive: false, family: 4 })
+});
+
 async function runFfmpeg(args: string[]) {
   return new Promise<void>((resolve, reject) => {
     const proc = spawn("ffmpeg", args, { stdio: ["ignore", "ignore", "pipe"] });
@@ -107,7 +114,7 @@ export async function transcribeRecording(filePath: string, filename: string) {
         const segmentStream = createReadStream(segmentPath);
         const segmentFile = await toFile(segmentStream, segmentName);
         const segmentTranscription = await withOpenAiRetries(async () => {
-          return openai.audio.transcriptions.create({
+          return transcribeClient.audio.transcriptions.create({
             file: segmentFile,
             model: env.WHISPER_MODEL,
             response_format: env.TRANSCRIBE_RESPONSE_FORMAT
@@ -132,7 +139,7 @@ export async function transcribeRecording(filePath: string, filename: string) {
     return withOpenAiRetries(async () => {
       const file = await toFile(fileBuffer, filename);
 
-      const transcription = await openai.audio.transcriptions.create({
+      const transcription = await transcribeClient.audio.transcriptions.create({
         file,
         model: env.WHISPER_MODEL,
         response_format: env.TRANSCRIBE_RESPONSE_FORMAT

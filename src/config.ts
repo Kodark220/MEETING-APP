@@ -21,6 +21,7 @@ const envSchema = z.object({
   TRANSCRIBE_MAX_BYTES: z.coerce.number().default(24 * 1024 * 1024),
   TRANSCRIBE_SEGMENT_SECONDS: z.coerce.number().default(300),
   TRANSCRIBE_RESPONSE_FORMAT: z.enum(["json", "verbose_json", "text", "srt", "vtt"]).default("json"),
+  TRANSCRIBE_TIMEOUT_MS: z.coerce.number().default(90_000),
   EMAIL_PROVIDER: z.enum(["smtp", "postmark"]).default("smtp"),
   EMAIL_FROM: z.string().email(),
   SMTP_HOST: z.string().optional(),
