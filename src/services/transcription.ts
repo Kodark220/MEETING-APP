@@ -110,12 +110,14 @@ export async function transcribeRecording(filePath: string, filename: string) {
           return openai.audio.transcriptions.create({
             file: segmentFile,
             model: env.WHISPER_MODEL,
-            response_format: "verbose_json"
+            response_format: env.TRANSCRIBE_RESPONSE_FORMAT
           });
         }, { attempts: 4, baseDelayMs: 3000, maxDelayMs: 30000 });
 
         combinedText += `${segmentTranscription.text || ""}\n`;
-        combinedSegments.push(...(segmentTranscription.segments || []));
+        if (env.TRANSCRIBE_RESPONSE_FORMAT === "verbose_json") {
+          combinedSegments.push(...(segmentTranscription.segments || []));
+        }
       }
 
       return {
@@ -131,12 +133,14 @@ export async function transcribeRecording(filePath: string, filename: string) {
       const transcription = await openai.audio.transcriptions.create({
         file,
         model: env.WHISPER_MODEL,
-        response_format: "verbose_json"
+        response_format: env.TRANSCRIBE_RESPONSE_FORMAT
       });
 
       return {
         text: transcription.text || "",
-        segments: transcription.segments || []
+        segments: env.TRANSCRIBE_RESPONSE_FORMAT === "verbose_json"
+          ? transcription.segments || []
+          : []
       };
     }, { attempts: 4, baseDelayMs: 3000, maxDelayMs: 30000 });
   } finally {
