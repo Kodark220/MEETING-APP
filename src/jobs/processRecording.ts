@@ -9,12 +9,20 @@ import { inferNextMeetingDate, normalizeOutcomes } from "../services/normalize.j
 import { sendOrganizerEmail } from "../services/email.js";
 
 export async function processRecording(recordingId: string) {
+  const startedAt = Date.now();
+  const log = (message: string) => {
+    const elapsedMs = Date.now() - startedAt;
+    console.log(`[recording ${recordingId}] ${message} (+${elapsedMs}ms)`);
+  };
+
+  log("Processing started");
   const recording = await getRecordingById(recordingId);
   if (!recording) {
     throw new Error("Recording not found");
   }
 
   if (recording.status === "emailed") {
+    log("Already emailed, skipping");
     return;
   }
 
@@ -25,12 +33,14 @@ export async function processRecording(recordingId: string) {
     if (!meeting) {
       throw new Error("Meeting not found");
     }
+    log("Loaded meeting details");
 
     let recordingFilePath = recording.file_path;
     let recordingExtension = recording.file_extension || "mp4";
 
     if (!recordingFilePath) {
       if (recording.provider === "zoom") {
+        log("Downloading Zoom recording");
         const organizerEmail = meeting.organizer_email;
         if (!organizerEmail) {
           throw new Error("Organizer email missing");
@@ -66,7 +76,9 @@ export async function processRecording(recordingId: string) {
         await updateRecordingFile(recording.id, stored.path, recording.duration_seconds);
         recordingFilePath = stored.path;
         recordingExtension = extension;
+        log("Zoom recording stored");
       } else if (recording.provider === "google_meet") {
+        log("Downloading Google Meet recording");
         const organizerEmail = meeting.organizer_email;
         if (!organizerEmail) {
           throw new Error("Organizer email missing");
@@ -95,6 +107,7 @@ export async function processRecording(recordingId: string) {
         await updateRecordingFile(recording.id, stored.path, recording.duration_seconds);
         recordingFilePath = stored.path;
         recordingExtension = extension;
+        log("Meet recording stored");
       } else {
         throw new Error("Unsupported provider");
       }
@@ -108,6 +121,7 @@ export async function processRecording(recordingId: string) {
       if (!recordingFilePath) {
         throw new Error("Recording file path missing");
       }
+      log("Transcription started");
       const filename = `recording.${recordingExtension}`;
       const transcript = await transcribeRecording(recordingFilePath, filename);
       transcriptSegments = transcript.segments.map((seg: any) => ({
@@ -124,11 +138,13 @@ export async function processRecording(recordingId: string) {
         content_json: transcriptSegments,
         content_text: transcriptText
       });
+      log("Transcription saved");
     } else {
       transcriptSegments = Array.isArray(transcriptRecord.content_json)
         ? (transcriptRecord.content_json as any)
         : [];
       transcriptText = transcriptRecord.content_text || "";
+      log("Using cached transcript");
     }
 
     let attendees: any[] = [];
@@ -154,6 +170,7 @@ export async function processRecording(recordingId: string) {
 
     const nextMeetingDate = inferNextMeetingDate(meeting.start_time);
 
+    log("Outcome extraction started");
     const outcomes = await extractMeetingOutcomes({
       meeting: {
         id: meeting.id,
@@ -176,6 +193,7 @@ export async function processRecording(recordingId: string) {
       followups: normalized.followups,
       internal_notes: normalized.internal_notes
     });
+    log("Artifact stored");
 
     if (meeting.organizer_email) {
       const meetingDate = meeting.start_time ? dayjs(meeting.start_time).format("YYYY-MM-DD") : null;
@@ -188,9 +206,11 @@ export async function processRecording(recordingId: string) {
         actionItems: normalized.action_items,
         followups: normalized.followups
       });
+      log("Organizer email sent");
     }
 
     await updateRecordingStatus(recordingId, "emailed");
+    log("Processing completed");
   } catch (err) {
     throw err;
   }
