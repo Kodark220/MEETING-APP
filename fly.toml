@@ -1,0 +1,11 @@
+app = "meeting-worker"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+
+[processes]
+  app = "node dist/jobs/worker.js"
